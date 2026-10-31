@@ -1,0 +1,47 @@
+# `npm run up` fills in the LAN addresses; the TV and the phone cannot reach "localhost".
+services:
+  hub:
+    build: .
+    ports:
+      - "8090:8090"
+    environment:
+      HUB_PUBLIC_URL: ${HUB_PUBLIC_URL:-}
+      JELLYFIN_URL: ${JELLYFIN_URL:-http://localhost:8096}
+      JACKETT_URL: ${JACKETT_URL:-}
+      JACKETT_API_KEY: ${JACKETT_API_KEY:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      TMDB_API_KEY: ${TMDB_API_KEY:-}
+    volumes:
+      - ./data:/data
+    restart: unless-stopped
+
+  jellyfin:
+    image: jellyfin/jellyfin:latest
+    ports:
+      - "8096:8096"
+    environment:
+      JELLYFIN_PublishedServerUrl: ${JELLYFIN_URL:-http://localhost:8096}
+    volumes:
+      - ./data/jellyfin/config:/config
+      - ./data/jellyfin/cache:/cache
+      - ${MEDIA_DIR:-./media}:/media:ro
+    restart: unless-stopped
+
+  jackett:
+    image: lscr.io/linuxserver/jackett:latest
+    profiles: [torrents]
+    ports:
+      - "9117:9117"
+    environment:
+      TZ: Europe/Prague
+    volumes:
+      - ./data/jackett:/config
+    restart: unless-stopped
+
+  flaresolverr:
+    image: ghcr.io/flaresolverr/flaresolverr:latest
+    profiles: [torrents]
+    environment:
+      LOG_LEVEL: info
+      TZ: Europe/Prague
+    restart: unless-stopped

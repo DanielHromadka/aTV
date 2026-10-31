@@ -1,0 +1,14 @@
+{
+  "detector": {
+    "ignoreRules": [],
+    "ignoreFiles": [],
+    "ignoreValues": [
+      {
+        "rule": "overused-font",
+        "value": "arial",
+        "createdAt": "2026-10-30T11:16:27.695Z",
+        "reason": "Claude: 'Zaoblené' font option must use system fonts only because TVs are often offline; Arial Rounded MT Bold is the first available rounded system face"
+      }
+    ]
+  }
+}

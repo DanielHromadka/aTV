@@ -1,0 +1,23 @@
+/** Editorial selection, not a claimed objective ranking; activity is verified against TMDB credits. */
+export const ACTOR_SELECTION = [
+  'Tom Hanks', 'Leonardo DiCaprio', 'Brad Pitt', 'Tom Cruise', 'Johnny Depp',
+  'Robert Downey Jr.', 'Denzel Washington', 'Morgan Freeman', 'Samuel L. Jackson', 'Keanu Reeves',
+  'Matt Damon', 'Christian Bale', 'Joaquin Phoenix', 'Jake Gyllenhaal', 'Ryan Gosling',
+  'Ryan Reynolds', 'Hugh Jackman', 'Russell Crowe', 'Will Smith', 'Bruce Willis',
+  'Nicolas Cage', 'Jim Carrey', 'Ben Stiller', 'Adam Sandler', 'Eddie Murphy',
+  'George Clooney', 'Mark Wahlberg', 'Edward Norton', 'Tom Hardy', 'Cillian Murphy',
+  'Andrew Garfield', 'Tom Holland', 'Daniel Craig', 'Colin Farrell', 'Anthony Hopkins',
+  'Gary Oldman', 'Jackie Chan', 'Shah Rukh Khan', 'Aamir Khan', 'Song Kang-ho',
+  'Meryl Streep', 'Julia Roberts', 'Nicole Kidman', 'Sandra Bullock', 'Cate Blanchett',
+  'Kate Winslet', 'Charlize Theron', 'Angelina Jolie', 'Scarlett Johansson', 'Natalie Portman',
+  'Anne Hathaway', 'Emma Stone', 'Jennifer Lawrence', 'Jessica Chastain', 'Amy Adams',
+  'Viola Davis', 'Julianne Moore', 'Michelle Williams', 'Frances McDormand', 'Tilda Swinton',
+  'Jodie Foster', 'Rachel McAdams', 'Rachel Weisz', 'Emily Blunt', 'Margot Robbie',
+  'Saoirse Ronan', 'Florence Pugh', 'Emma Watson', 'Keira Knightley', 'Penélope Cruz',
+  'Salma Hayek', 'Marion Cotillard', 'Léa Seydoux', 'Monica Bellucci', 'Michelle Yeoh',
+  'Zhang Ziyi', 'Deepika Padukone', 'Priyanka Chopra Jonas', 'Gong Li', 'Kate Beckinsale',
+  'Ivan Trojan', 'Jiří Macháček', 'Karel Roden', 'Ondřej Vetchý', 'Bolek Polívka',
+  'Jiří Bartoška', 'Hynek Čermák', 'Pavel Liška', 'Tomáš Maštalír', 'Marián Geišberg',
+  'Aňa Geislerová', 'Tatiana Dyková', 'Anna Polívková', 'Klára Issová', 'Martha Issová',
+  'Lenka Vlasáková', 'Simona Stašová', 'Zuzana Kronerová', 'Emília Vášáryová', 'Táňa Pauhofová',
+] as const

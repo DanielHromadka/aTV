@@ -1,0 +1,40 @@
+{
+  "samsung": {
+    "host": "192.168.0.106",
+    "mac": "54:bd:79:9d:44:bb",
+    "name": "aTV"
+  },
+  "iptv": {
+    "playlist": "iptv.m3u"
+  },
+  "immich": {
+    "url": "http://192.168.0.10:2283",
+    "apiKey": "…",
+    "albumId": null
+  },
+  "homeAssistant": {
+    "url": "http://homeassistant.local:8123",
+    "token": "…",
+    "scenes": {
+      "playing": "scene.kino",
+      "stopped": "scene.obyvak"
+    }
+  },
+  "weather": {
+    "lat": 50.0755,
+    "lon": 14.4378,
+    "name": "Praha"
+  },
+  "anthropicApiKey": null,
+  "jackett": {
+    "url": "http://jackett:9117",
+    "apiKey": "API klíč z Jackettu",
+    "indexers": [
+      "sktorrent",
+      "yts",
+      "1337x",
+      "thepiratebay",
+      "therarbg"
+    ]
+  }
+}

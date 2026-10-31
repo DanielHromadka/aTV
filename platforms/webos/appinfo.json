@@ -1,0 +1,12 @@
+{
+  "id": "cz.attosoft.atv",
+  "version": "0.1.0",
+  "vendor": "attosoft",
+  "type": "web",
+  "main": "index.html",
+  "title": "aTV",
+  "icon": "icon.png",
+  "largeIcon": "icon.png",
+  "resolution": "1920x1080",
+  "disableBackHistoryAPI": true
+}
