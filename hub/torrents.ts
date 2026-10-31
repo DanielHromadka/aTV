@@ -3,14 +3,21 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 import { join } from 'node:path'
 import { pipeline } from 'node:stream'
 import type { TorrentFileInfo } from '../shared/media.ts'
+import { contiguousBytes, pieceRange, type PieceLayout } from '../shared/downloads.ts'
 
 // The parts of WebTorrent we use (the package ships no types).
 interface TFile {
   name: string
   path: string
   length: number
+  /** Byte offset of the file inside the torrent. */
+  offset: number
+  done: boolean
+  progress: number
   createReadStream(opts?: { start?: number; end?: number }): NodeJS.ReadableStream
+  select(priority?: number): void
   deselect(): void
+  once(event: 'done', cb: () => void): void
 }
 interface Torrent {
   infoHash: string
@@ -21,6 +28,19 @@ interface Torrent {
   downloadSpeed: number
   uploadSpeed: number
   numPeers: number
+  /** Folder the torrent's files are written to. */
+  path: string
+  pieceLength: number
+  pieces: unknown[]
+  bitfield?: { get(index: number): boolean }
+  critical(start: number, end: number): void
+  /**
+   * Internal, but the only way to a selection that is not merged with others: plain selections that
+   * overlap are joined (WebTorrent 3.0), so a moving window inside a whole-file selection would vanish.
+   * Stream selections stay separate and are removed exactly. Checked against webtorrent 3.0.21.
+   */
+  _select(start: number, end: number, priority: number, notify: null, isStreamSelection: true): void
+  _deselect(start: number, end: number, isStreamSelection: true): void
   once(event: 'ready', cb: () => void): void
   once(event: 'error', cb: (e: Error) => void): void
   destroy(opts: { destroyStore: boolean }, cb?: () => void): void
@@ -40,16 +60,23 @@ const MIME: Record<string, string> = {
 
 const MAX_ACTIVE = 3
 const IDLE_MS = 2 * 3600_000
+/** Above a player's own read stream (1): the window ahead of the playhead comes first. */
+const WINDOW_PRIORITY = 2
+/** Pieces right at the playhead are asked from every peer at once. */
+const CRITICAL_PIECES = 4
 /** Only errors with messages safe to display to the client use this type. */
 export class TorrentOpenError extends Error {}
 
 /**
- * Torrents as streamable files. Nothing downloads until a file is read: playback pulls the pieces
- * it needs (seeking included), and torrents unused for two hours are removed with their data.
+ * Torrents as streamable files. Nothing downloads until a file is played or downloaded. While a
+ * film plays, the next ten minutes from the playhead download first (a window that follows the
+ * playback), and the rest of the file fills in behind at low priority, so the player never waits
+ * for pieces it will need soon even when it pauses its own reading. Torrents unused for two hours
+ * are removed with their data, except those being downloaded to the library (pinned).
  */
 export class Torrents {
   private client?: Promise<Client>
-  private readonly active = new Map<string, { torrent: Torrent; used: number }>()
+  private readonly active = new Map<string, { torrent: Torrent; used: number; window?: [number, number]; pinned?: boolean }>()
   private readonly opening = new Map<string, Promise<Torrent>>()
   private readonly dir: string
 
@@ -111,6 +138,56 @@ export class Torrents {
     return torrent
   }
 
+  layout(t: Torrent, index: number): PieceLayout | undefined {
+    const file = t.files[index]
+    if (!file) return undefined
+    return { fileOffset: file.offset, fileLength: file.length, pieceLength: t.pieceLength, pieceCount: t.pieces.length }
+  }
+
+  /** Downloads `bytes` of the file from `position` first, replacing the previous window of this torrent. */
+  prioritize(key: string, index: number, position: number, bytes: number): void {
+    const a = this.active.get(key)
+    const l = a && this.layout(a.torrent, index)
+    if (!a || !l || !l.fileLength) return
+    a.used = Date.now()
+    const [from, to] = pieceRange(l, position, bytes)
+    if (a.window?.[0] === from && a.window[1] === to) return
+    if (a.window) a.torrent._deselect(a.window[0], a.window[1], true)
+    a.torrent._select(from, to, WINDOW_PRIORITY, null, true)
+    a.torrent.critical(from, Math.min(to, from + CRITICAL_PIECES - 1))
+    a.window = [from, to]
+  }
+
+  /** Lets the whole file download behind the window (lowest priority, in order). */
+  fill(t: Torrent, index: number): void {
+    t.files[index]?.select(0)
+  }
+
+  /** Bytes downloaded without a gap from `position`. */
+  ahead(t: Torrent, index: number, position: number): number {
+    const l = this.layout(t, index)
+    const bits = t.bitfield
+    if (!l || !bits) return 0
+    return contiguousBytes(l, position, (p) => bits.get(p))
+  }
+
+  /** Keeps a torrent (no eviction, no idle removal) while it downloads to the library. */
+  pin(key: string, on: boolean): void {
+    const a = this.active.get(key)
+    if (a) a.pinned = on
+  }
+
+  /** Where the file is on disk (complete once `file.done`). */
+  filePath(t: Torrent, index: number): string | undefined {
+    const file = t.files[index]
+    return file && join(t.path, file.path)
+  }
+
+  /** Forgets the torrent and deletes its data now. */
+  drop(key: string): void {
+    this.remove(key)
+  }
+
   get(key: string): Torrent | undefined {
     const a = this.active.get(key)
     if (a) a.used = Date.now()
@@ -131,7 +208,7 @@ export class Torrents {
   }
 
   /** Serves one file with HTTP range support, so players can seek. */
-  serve(t: Torrent, index: number, req: IncomingMessage, res: ServerResponse): void {
+  serve(t: Torrent, index: number, req: IncomingMessage, res: ServerResponse, onRead?: (position: number) => void): void {
     const file = t.files[index]
     if (!file) {
       res.writeHead(404)
@@ -167,7 +244,21 @@ export class Torrents {
       res.end()
       return
     }
-    pipeline(file.createReadStream({ start, end }), res, () => {})
+    const stream = file.createReadStream({ start, end })
+    if (onRead) {
+      // Report where the player reads, at most every two seconds, so the download window follows it.
+      let position = start
+      let reported = 0
+      onRead(position)
+      stream.on('data', (chunk: Buffer) => {
+        position += chunk.length
+        if (Date.now() - reported > 2000) {
+          reported = Date.now()
+          onRead(position)
+        }
+      })
+    }
+    pipeline(stream, res, () => {})
   }
 
   /** Reads a small file (subtitles) completely. */
@@ -183,14 +274,13 @@ export class Torrents {
   }
 
   private evict(): void {
-    while (this.active.size >= MAX_ACTIVE) {
-      const [oldest] = [...this.active.entries()].sort((a, b) => a[1].used - b[1].used)
-      this.remove(oldest[0])
-    }
+    // Library downloads are never evicted; with only those left, one more torrent may be open.
+    const unpinned = () => [...this.active.entries()].filter(([, a]) => !a.pinned).sort((a, b) => a[1].used - b[1].used)
+    while (this.active.size >= MAX_ACTIVE && unpinned().length) this.remove(unpinned()[0][0])
   }
 
   private sweep(): void {
-    for (const [key, a] of this.active) if (Date.now() - a.used > IDLE_MS) this.remove(key)
+    for (const [key, a] of this.active) if (!a.pinned && Date.now() - a.used > IDLE_MS) this.remove(key)
   }
 
   private remove(key: string): void {

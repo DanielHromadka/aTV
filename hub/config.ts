@@ -13,6 +13,10 @@ export interface HubConfig {
   dataDir: string
   distDir: string
   jellyfinUrl?: string
+  /** Jellyfin API key (Dashboard → API Keys), so the hub can refresh the library after a download. */
+  jellyfinApiKey?: string
+  /** The Jellyfin media folder (with Filmy/) that library downloads go to. */
+  libraryDir: string
   samsung?: { host: string; mac?: string; name?: string }
   iptv?: { playlist: string }
   immich?: { url: string; apiKey: string; albumId?: string }
@@ -51,6 +55,8 @@ export function loadConfig(env = process.env): HubConfig {
     dataDir,
     distDir: env.ATV_DIST ?? 'dist',
     jellyfinUrl: env.JELLYFIN_URL ?? file.jellyfinUrl,
+    jellyfinApiKey: env.JELLYFIN_API_KEY || file.jellyfinApiKey,
+    libraryDir: env.ATV_LIBRARY ?? file.libraryDir ?? 'media',
     samsung: samsungHost
       ? { host: samsungHost, mac: env.SAMSUNG_MAC ?? file.samsung?.mac, name: file.samsung?.name }
       : undefined,

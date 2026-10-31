@@ -116,6 +116,23 @@ celou TMDB. Metadata vybraných herců fungují i bez nového dotazu na TMDB,
 fotografie a obaly se načítají z jejího obrazového serveru. Pro aktualizaci
 filmografií spusťte import znovu. Importuje se katalog filmů, nikoliv videosoubory.
 
+## Přehrávání a stahování torrentů
+
+Torrenty se stahují jen na hub (`data/torrents`), televize přehrává běžný stream z hubu.
+
+- **Při přehrávání** hub sleduje, kde přehrávač čte, a vždy nejdřív stahuje **10 minut filmu od
+  tohoto místa** (okno se posouvá s přehráváním i při přetočení). Zbytek souboru se dotahuje na
+  pozadí s nižší prioritou, takže stahování nestojí, ani když přehrávač zrovna nic nečte.
+- **Před spuštěním** se čeká na zásobu (60 s dopředu, nebo méně, když stahování jasně stíhá),
+  obrazovka ukazuje postup a nabízí **Přehrát hned**. Pokračování od uložené pozice připravuje
+  zásobu od ní.
+- **⬇ Stáhnout do Knihovny** (detail filmu) stáhne vybraný soubor celý, i s titulky stejného
+  jména, a zkopíruje ho do `media/Filmy/Název (rok)/` (v Dockeru `MEDIA_DIR`, mimo Docker
+  `libraryDir`/`ATV_LIBRARY`), kde ho najde Jellyfin. Průběh je v detailu a v **Archivní filmy →
+  Stahování do Knihovny**; rozpracovaná stahování pokračují i po restartu hubu.
+- Knihovnu pak obnoví hub, pokud má `JELLYFIN_API_KEY` (Jellyfin → Ovládací panel → Klíče API),
+  jinak televize přihlášená do Jellyfinu jako správce. Data torrentu se smažou po 2 h nečinnosti.
+
 ## Pokračovat ve sledování
 
 Hlavní stránka spojuje rozkoukané položky Jellyfinu s torrenty a ostatními videi

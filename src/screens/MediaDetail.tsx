@@ -3,8 +3,12 @@ import { formatTime } from '../../shared/context.ts'
 import { LANGUAGE_NAMES, needsTranscode, type Probe, type TorrentFileInfo } from '../../shared/media.ts'
 import { Button, Message, Spinner } from '../components'
 import { platform } from '../runtime'
-import { nav, useStore } from '../state'
+import { nav, toast, useStore } from '../state'
 import { hubApi, hubUrl } from '../services/hub'
+import { watchHistory } from '../services/watch-history'
+import { resumeWatch } from '../../shared/watch-history'
+import { START_BUFFER_SECONDS, type DownloadInfo } from '../../shared/downloads.ts'
+import type { PlayerSource } from '../state'
 import { settings } from '../services/settings'
 
 interface Details {
@@ -24,11 +28,31 @@ interface Status {
   peers: number
 }
 
+interface Buffer {
+  aheadSeconds: number
+  downloadSpeed: number
+  bytesPerSecond: number
+  complete: boolean
+  peers: number
+  ready: boolean
+}
+
+async function hubSend<T>(path: string, method: 'POST' | 'DELETE', body?: unknown): Promise<T> {
+  const res = await fetch(hubUrl() + path, {
+    method,
+    headers: body ? { 'content-type': 'application/json' } : undefined,
+    body: body ? JSON.stringify(body) : undefined,
+  })
+  const data = (await res.json().catch(() => ({}))) as T & { error?: string }
+  if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`)
+  return data
+}
+
 const langName = (l?: string) => (l ? LANGUAGE_NAMES[l] ?? l.toUpperCase() : undefined)
 const mb = (bytes: number) => `${(bytes / 1_000_000).toFixed(bytes > 10_000_000 ? 0 : 1)} MB`
 
 /** One torrent film: connect, pick video file, audio track and subtitles, then play while it downloads. */
-export function MediaDetail({ mediaKey, title, poster, description }: { mediaKey: string; title: string; poster?: string; description?: string }) {
+export function MediaDetail({ mediaKey, title, poster, description, year }: { mediaKey: string; title: string; poster?: string; description?: string; year?: number }) {
   const s = useStore(settings)
   const [d, setD] = useState<Details | null>(null)
   const [status, setStatus] = useState<Status | null>(null)
@@ -39,6 +63,52 @@ export function MediaDetail({ mediaKey, title, poster, description }: { mediaKey
   const [subtitle, setSubtitle] = useState<number | null>(null)
   const subtitleChosen = useRef(false)
   const base = `${hubUrl()}/api/media/${encodeURIComponent(mediaKey)}`
+  const api = `/api/media/${encodeURIComponent(mediaKey)}`
+  // Waiting for the start buffer: the source to play once enough is downloaded ahead.
+  const [preparing, setPreparing] = useState<{ source: PlayerSource; file: number; at: number } | null>(null)
+  const [buffer, setBuffer] = useState<Buffer | null>(null)
+  const [download, setDownload] = useState<DownloadInfo | null>(null)
+
+  useEffect(() => {
+    let cancelled = false
+    const load = () => hubApi<DownloadInfo>(`${api}/download`).then((info) => !cancelled && setDownload(info), () => !cancelled && setDownload(null))
+    void load()
+    const t = window.setInterval(load, 3000)
+    return () => { cancelled = true; window.clearInterval(t) }
+  }, [mediaKey])
+
+  // Ask the hub to download from the start position first, then play once a minute is ready.
+  useEffect(() => {
+    if (!preparing) return
+    let cancelled = false
+    let timer: number | undefined
+    const check = async () => {
+      try {
+        const b = await hubApi<Buffer>(`${api}/files/${preparing.file}/prepare?t=${Math.floor(preparing.at)}`)
+        if (cancelled) return
+        setBuffer(b)
+        if (b.ready) {
+          setPreparing(null)
+          nav.push({ type: 'player', source: preparing.source })
+          return
+        }
+      } catch (e) {
+        if (cancelled) return
+        toast((e as Error).message)
+      }
+      timer = window.setTimeout(check, 1000)
+    }
+    void check()
+    return () => { cancelled = true; window.clearTimeout(timer) }
+  }, [preparing])
+
+  const startDownload = () => {
+    hubSend<DownloadInfo>(`${api}/download`, 'POST', { title, year, file: video })
+      .then((info) => { setDownload(info); toast('Stahuji do Knihovny') }, (e: Error) => toast(e.message))
+  }
+  const cancelDownload = () => {
+    hubSend(`${api}/download`, 'DELETE').then(() => setDownload(null), (e: Error) => toast(e.message))
+  }
 
   useEffect(() => {
     let cancelled = false
@@ -96,22 +166,23 @@ export function MediaDetail({ mediaKey, title, poster, description }: { mediaKey
     const probe = video === d.main ? d.probe : undefined
     const transcode = needsTranscode(platform.id, file.name, probe, audio)
     const sub = d.subtitles.find((x) => x.index === subtitle)
-    nav.push({
-      type: 'player',
-      source: {
-        kind: 'url',
-        historyId: `${mediaKey}/${video}`,
-        mediaKey,
-        poster,
-        title: d.title || title,
-        url: `${base}/files/${video}`,
-        seekTemplate: transcode ? `${base}/files/${video}/play?audio=${audio}&t={t}` : undefined,
-        duration: probe?.duration,
-        subtitle: sub
-          ? { label: langName(sub.lang) ?? sub.name, lang: sub.lang, src: `${base}/files/${sub.index}/vtt${transcode ? '?shift={t}' : ''}` }
-          : undefined,
-      },
-    })
+    const source: PlayerSource = {
+      kind: 'url',
+      historyId: `${mediaKey}/${video}`,
+      mediaKey,
+      poster,
+      title: d.title || title,
+      url: `${base}/files/${video}`,
+      seekTemplate: transcode ? `${base}/files/${video}/play?audio=${audio}&t={t}` : undefined,
+      duration: probe?.duration,
+      subtitle: sub
+        ? { label: langName(sub.lang) ?? sub.name, lang: sub.lang, src: `${base}/files/${sub.index}/vtt${transcode ? '?shift={t}' : ''}` }
+        : undefined,
+    }
+    // Resume where it was left; the buffer is prepared from that point.
+    const at = (source.kind === 'url' && resumeWatch(source, watchHistory.get()).startSeconds) || 0
+    setBuffer(null)
+    setPreparing({ source, file: video, at })
   }
 
   return (
@@ -181,9 +252,31 @@ export function MediaDetail({ mediaKey, title, poster, description }: { mediaKey
                 Ve videu jsou vložené titulky ({d.probe!.embeddedSubtitles.map((x) => langName(x.lang) ?? '?').join(', ')}); zobrazit je zatím neumím.
               </div>
             )}
-            {video !== undefined && <div class="buttons">
+            {preparing ? (
+              <div class="prepare">
+                <Spinner label={buffer
+                  ? `Připravuji přehrávání: staženo ${Math.min(buffer.aheadSeconds, START_BUFFER_SECONDS)} s z ${START_BUFFER_SECONDS} s dopředu · ${mb(buffer.downloadSpeed)}/s`
+                  : 'Připravuji přehrávání…'} />
+                <div class="buttons">
+                  <Button id="play-now" autofocus label="Přehrát hned" onClick={() => { const p = preparing; setPreparing(null); nav.push({ type: 'player', source: p.source }) }} />
+                  <Button id="play-cancel" label="Zrušit" onClick={() => setPreparing(null)} />
+                </div>
+                {buffer && buffer.peers === 0 && <div class="muted">Zatím se nepřipojil žádný zdroj.</div>}
+              </div>
+            ) : video !== undefined && <div class="buttons">
               <Button id="play" primary autofocus label="▶ Přehrát" onClick={play} />
+              {!download && <Button id="download" label="⬇ Stáhnout do Knihovny" onClick={startDownload} />}
+              {download?.state === 'error' && <Button id="download" label="⬇ Stáhnout znovu" onClick={startDownload} />}
+              {download && download.state !== 'done' && download.state !== 'error' && <Button id="download-cancel" label="Zrušit stahování" onClick={cancelDownload} />}
             </div>}
+            {download && (
+              <div class="muted">
+                {download.state === 'downloading' && `Stahuji do Knihovny: ${Math.round(download.progress * 100)} % · ${mb(download.downloadSpeed)}/s · ${download.peers} zdrojů`}
+                {download.state === 'copying' && 'Ukládám do Knihovny…'}
+                {download.state === 'done' && `✓ V Knihovně: ${download.path}`}
+                {download.state === 'error' && `Stažení se nepodařilo: ${download.error}`}
+              </div>
+            )}
           </>
         )}
       </div>

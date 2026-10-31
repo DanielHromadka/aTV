@@ -3,11 +3,12 @@ import { languageBadge, type MediaResult } from '../../shared/media.ts'
 import { Button, Card, Message, Row, Spinner } from '../components'
 import { nav } from '../state'
 import { hubApi, hubUrl } from '../services/hub'
+import type { DownloadInfo } from '../../shared/downloads.ts'
 
 const posterUrl = (url?: string) => url?.startsWith('/api/') ? hubUrl() + url : url
 
 export function openResult(r: MediaResult): void {
-  nav.push({ type: 'media-detail', mediaId: r.id, title: r.title, poster: posterUrl(r.poster), description: r.description })
+  nav.push({ type: 'media-detail', mediaId: r.id, title: r.title, poster: posterUrl(r.poster), description: r.description, year: r.year })
 }
 
 export function ResultCard({ r, prefix }: { r: MediaResult; prefix: string }) {
@@ -29,8 +30,17 @@ export function Media() {
   const [data, setData] = useState<{ catalog: MediaResult[]; archive: MediaResult[] } | null>(null)
   const [error, setError] = useState('')
 
+  const [downloads, setDownloads] = useState<DownloadInfo[]>([])
+
   useEffect(() => {
     hubApi<{ catalog: MediaResult[]; archive: MediaResult[] }>('/api/media/browse').then(setData, (e: Error) => setError(e.message))
+  }, [])
+
+  useEffect(() => {
+    const load = () => hubApi<DownloadInfo[]>('/api/downloads').then(setDownloads, () => {})
+    void load()
+    const t = window.setInterval(load, 3000)
+    return () => window.clearInterval(t)
   }, [])
 
   return (
@@ -44,6 +54,22 @@ export function Media() {
       </div>
       {error && <div class="padded-x"><Message>{error}</Message></div>}
       {!data && !error && <Spinner />}
+      {downloads.length > 0 && (
+        <Row title="Stahování do Knihovny">
+          {downloads.map((d) => (
+            <Card
+              key={d.key}
+              id={`dl-${d.key}`}
+              landscape
+              title={d.title}
+              fallback={d.title}
+              progress={d.state === 'downloading' ? d.progress : undefined}
+              subtitle={d.state === 'done' ? '✓ V Knihovně' : d.state === 'copying' ? 'Ukládám…' : d.state === 'error' ? `Chyba: ${d.error}` : `${Math.round(d.progress * 100)} % · ${(d.downloadSpeed / 1_000_000).toFixed(1)} MB/s`}
+              onClick={() => (d.state === 'done' ? nav.push({ type: 'library' }) : nav.push({ type: 'media-detail', mediaId: d.key, title: d.title }))}
+            />
+          ))}
+        </Row>
+      )}
       {data && data.catalog.length > 0 && (
         <Row title="Můj katalog">
           {data.catalog.map((r) => (

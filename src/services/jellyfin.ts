@@ -108,6 +108,11 @@ export class Jellyfin {
     return request<T>(this.s.server, 'POST', path + qs(query), this.s.token, body ?? {})
   }
 
+  /** Scans the libraries for new files (needs an administrator login; quietly fails otherwise). */
+  refreshLibrary(): Promise<void> {
+    return this.post<void>('/Library/Refresh')
+  }
+
   async views(): Promise<Item[]> {
     return (await this.get<ItemsResult>('/UserViews', { userId: this.s.userId })).Items
   }

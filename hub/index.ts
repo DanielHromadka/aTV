@@ -27,6 +27,7 @@ import { SAMSUNG_ACTION_KEYS, SAMSUNG_KEYS, SamsungTv } from './samsung.ts'
 import { PairingCode, safeEqual, Store } from './store.ts'
 import { Torrents } from './torrents.ts'
 import { Ivysilani } from './ivysilani.ts'
+import { Downloads } from './downloads.ts'
 
 /** aTV's own Tizen app id (platforms/tizen/config.xml), started when a command needs the TV app. */
 const ATV_TIZEN_ID = 'aTVattoSft.aTV'
@@ -99,6 +100,28 @@ function send(ws: WebSocket, msg: HubToTv | HubToRemote): void {
 function toTvs(msg: HubToTv): void {
   for (const ws of tvs) send(ws, msg)
 }
+
+/** Asks Jellyfin to scan its libraries; without an API key the TVs do it with their own login. */
+async function refreshJellyfin(): Promise<void> {
+  if (config.jellyfinUrl && config.jellyfinApiKey) {
+    const res = await fetch(`${config.jellyfinUrl.replace(/\/+$/, '')}/Library/Refresh`, {
+      method: 'POST',
+      headers: { 'X-Emby-Token': config.jellyfinApiKey },
+      signal: AbortSignal.timeout(10_000),
+    }).catch(() => null)
+    if (res?.ok) return
+    console.warn('[download] Jellyfin refresh failed; the TV will try')
+  }
+  toTvs({ t: 'library-updated' })
+}
+
+media.downloads = new Downloads(config.dataDir, config.libraryDir, torrents, {
+  resolve: (key) => media.resolveSource(key),
+  done: (title) => {
+    void refreshJellyfin()
+    toTvs({ t: 'notify', title: 'Staženo do Knihovny', text: `${title} bude v Knihovně, až ji Jellyfin načte.` })
+  },
+})
 function toRemotes(msg: HubToRemote): void {
   for (const ws of remotes) send(ws, msg)
 }

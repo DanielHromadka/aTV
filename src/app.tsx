@@ -12,6 +12,7 @@ import { platform } from './runtime'
 import { keyHandlers, nav, playerControl, stack, textHandlers, useStore, type StackEntry } from './state'
 import { onHubMessage, reportState } from './services/hub'
 import { settings } from './services/settings'
+import { jellyfin } from './services/jellyfin'
 import { appearance } from './services/appearance'
 import { Detail } from './screens/Detail'
 import { Home, SleepBadge } from './screens/Home'
@@ -78,6 +79,7 @@ function onHub(msg: HubToTv): void {
     setSaver(false)
     runIntent(msg.intent).catch(() => {})
   } else if (msg.t === 'sleep-fire') sleepNow()
+  else if (msg.t === 'library-updated') void jellyfin()?.refreshLibrary().catch(() => {})
   else if (msg.t === 'appearance') appearance.set({ appearance: msg.appearance, backgrounds: msg.backgrounds })
 }
 
@@ -152,7 +154,7 @@ function ScreenView({ entry, top, under }: { entry: StackEntry; top: boolean; un
       body = <ActorDetail actor={entry.actor} />
       break
     case 'media-detail':
-      body = <MediaDetail mediaKey={entry.mediaId} title={entry.title} poster={entry.poster} description={entry.description} />
+      body = <MediaDetail mediaKey={entry.mediaId} title={entry.title} poster={entry.poster} description={entry.description} year={entry.year} />
       break
     case 'login':
       body = <Login />

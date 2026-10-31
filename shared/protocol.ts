@@ -42,6 +42,8 @@ export type HubToTv =
   | { t: 'text'; text: string; submit?: boolean }
   | { t: 'intent'; intent: Intent }
   | { t: 'notify'; title: string; text?: string; image?: string }
+  /** A film was added to the Jellyfin folder: the TV asks Jellyfin to scan it (when the hub cannot). */
+  | { t: 'library-updated' }
   | { t: 'sleep'; endsAt: number | null }
   | { t: 'sleep-fire' }
   | { t: 'pairing'; code: string; url: string }

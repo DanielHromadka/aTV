@@ -22,6 +22,8 @@ import { Searches } from './search.ts'
 import type { Jackett } from './jackett.ts'
 import type { Catalog } from './catalog.ts'
 import { TorrentOpenError, type Torrents } from './torrents.ts'
+import { AHEAD_SECONDS, bytesPerSecond, readyToPlay } from '../shared/downloads.ts'
+import type { Downloads } from './downloads.ts'
 
 export interface MediaDetails {
   key: string
@@ -73,6 +75,11 @@ export class Media {
   private readonly searches: Searches
   private readonly sourceSearches = new Map<string, Searches>()
   private readonly covers = new AudioCovers()
+  /** Video files that already download in full behind the playback window. */
+  private readonly filling = new Set<string>()
+  /** Last read position per played file, for the start buffer. */
+  private readonly playheads = new Map<string, number>()
+  downloads?: Downloads
 
   constructor(catalog: Catalog, torrents: Torrents, port: number, jackett?: Jackett) {
     this.jackett = jackett
@@ -102,8 +109,55 @@ export class Media {
     return entry.source
   }
 
-  private fileUrl(key: string, index: number): string {
-    return `${this.selfUrl}/api/media/${encodeURIComponent(key)}/files/${index}`
+  private fileUrl(key: string, index: number, probe = false): string {
+    return `${this.selfUrl}/api/media/${encodeURIComponent(key)}/files/${index}${probe ? '?probe=1' : ''}`
+  }
+
+  /** The torrent source for a key, resolving Jackett links (which expire) to a magnet or .torrent file. */
+  resolveSource(key: string): Promise<string | Buffer> {
+    const source = this.source(key)
+    return key.startsWith('jk:') && this.jackett ? this.jackett.resolveSource(key) : Promise.resolve(source)
+  }
+
+  private bytesPerSecond(key: string, index: number): number {
+    const t = this.torrents.get(key)
+    const length = t?.files[index]?.length ?? 0
+    return bytesPerSecond(length, this.probes.get(`${key}/${index}`)?.duration)
+  }
+
+  /**
+   * The player (or ffmpeg for it) reads `position`: the next ten minutes from there download first,
+   * and the whole file fills in behind. Reads in the last 2 % (players looking up an index at the end
+   * of an MP4) do not move the window.
+   */
+  private follow(key: string, index: number, position: number): void {
+    const t = this.torrents.get(key)
+    const file = t?.files[index]
+    if (!t || !file || !isVideo(file.name)) return
+    if (position > file.length * 0.98 && this.playheads.has(`${key}/${index}`)) return
+    if (!this.filling.has(`${key}/${index}`)) {
+      this.filling.add(`${key}/${index}`)
+      this.torrents.fill(t, index)
+    }
+    this.playheads.set(`${key}/${index}`, position)
+    this.torrents.prioritize(key, index, position, this.bytesPerSecond(key, index) * AHEAD_SECONDS)
+  }
+
+  /** Buffer ahead of a position (default: the current playhead), for the start-of-playback wait. */
+  private buffer(key: string, index: number, position?: number) {
+    const t = this.torrents.get(key)
+    const file = t?.files[index]
+    const bps = this.bytesPerSecond(key, index)
+    const at = position ?? this.playheads.get(`${key}/${index}`) ?? 0
+    const ahead = t && file ? this.torrents.ahead(t, index, at) : 0
+    const state = {
+      aheadSeconds: Math.round(ahead / bps),
+      downloadSpeed: Math.round(t?.downloadSpeed ?? 0),
+      bytesPerSecond: Math.round(bps),
+      complete: !!file?.done,
+      peers: t?.numPeers ?? 0,
+    }
+    return { ...state, ready: readyToPlay(state) }
   }
 
   async search(q: string, filter: { lang?: string; subtitles?: boolean }): Promise<MediaResult[]> {
@@ -138,20 +192,9 @@ export class Media {
     const main = mainVideo(files)
     const subtitles = subtitleFiles(files).map((s) => ({ index: s.index, name: s.name.split('/').pop() ?? s.name, lang: s.lang }))
     const probeKey = main ? `${key}/${main.index}` : ''
+    if (main) this.ensureProbe(key, main.index, torrent)
     const probe = this.probes.get(probeKey)
     const failedAt = this.probeFailures.get(probeKey)
-    // Metadata is useful even when no peer has the video. Never block the detail on ffprobe.
-    if (main && !probe && !this.probing.has(probeKey) && (!failedAt || Date.now() - failedAt > 30_000)
-      && (torrent.numPeers > 0 || torrent.progress > 0)) {
-      this.probing.add(probeKey)
-      void this.probe(key, main.index).then((found) => {
-        this.probes.set(probeKey, found)
-        this.probeFailures.delete(probeKey)
-      }, () => {
-        this.probeFailures.set(probeKey, Date.now())
-        console.warn('[ffprobe] Analýza videa není dostupná')
-      }).finally(() => this.probing.delete(probeKey))
-    }
     const entry = this.catalog.get(key)
     if (entry) {
       // Remember what the torrent contains, so search can filter by language next time.
@@ -172,8 +215,26 @@ export class Media {
     }
   }
 
+  /** Reads tracks and length in the background (never blocks a request on ffprobe). */
+  private ensureProbe(key: string, index: number, torrent = this.torrents.get(key)): void {
+    const probeKey = `${key}/${index}`
+    const failedAt = this.probeFailures.get(probeKey)
+    if (!torrent || this.probes.has(probeKey) || this.probing.has(probeKey)) return
+    if (failedAt && Date.now() - failedAt < 30_000) return
+    // Metadata is useful even when no peer has the video yet, but needs at least one.
+    if (torrent.numPeers === 0 && torrent.progress === 0) return
+    this.probing.add(probeKey)
+    void this.probe(key, index).then((found) => {
+      this.probes.set(probeKey, found)
+      this.probeFailures.delete(probeKey)
+    }, () => {
+      this.probeFailures.set(probeKey, Date.now())
+      console.warn('[ffprobe] Analýza videa není dostupná')
+    }).finally(() => this.probing.delete(probeKey))
+  }
+
   private async probe(key: string, index: number): Promise<Probe> {
-    const out = await run('ffprobe', ['-v', 'error', '-rw_timeout', '10000000', '-print_format', 'json', '-show_streams', '-show_format', this.fileUrl(key, index)], 15_000)
+    const out = await run('ffprobe', ['-v', 'error', '-rw_timeout', '10000000', '-print_format', 'json', '-show_streams', '-show_format', this.fileUrl(key, index, true)], 15_000)
     const data = JSON.parse(out) as {
       format?: { duration?: string }
       streams?: { codec_type: string; codec_name: string; channels?: number; tags?: { language?: string; title?: string } }[]
@@ -309,7 +370,11 @@ export class Media {
       return true
     }
 
-    const m = /^\/api\/media\/([^/]+)(?:\/(status|poster|files\/(\d+)(?:\/(play|vtt))?))?$/.exec(path)
+    if (path === '/api/downloads' && req.method === 'GET') {
+      ctx.json(res, 200, this.downloads?.list() ?? [])
+      return true
+    }
+    const m = /^\/api\/media\/([^/]+)(?:\/(status|poster|download|files\/(\d+)(?:\/(play|vtt|prepare))?))?$/.exec(path)
     if (!m) return false
     let key: string
     try {
@@ -340,6 +405,27 @@ export class Media {
       }
       return true
     }
+    if (m[2] === 'download') {
+      if (!this.downloads) {
+        ctx.json(res, 503, { error: 'Stahování do knihovny není nastavené.' })
+      } else if (req.method === 'DELETE') {
+        ctx.json(res, (await this.downloads.cancel(key)) ? 200 : 404, { ok: true })
+      } else if (req.method === 'POST') {
+        const body = await ctx.readJson(req)
+        const year = typeof body.year === 'number' && body.year > 1880 && body.year < 2100 ? body.year : undefined
+        const title = typeof body.title === 'string' && body.title.trim() ? body.title.trim().slice(0, 200) : (this.catalog.get(key)?.title ?? this.jackett?.title(key) ?? this.torrents.get(key)?.name ?? key)
+        try {
+          const index = typeof body.file === 'number' && Number.isInteger(body.file) && body.file >= 0 ? body.file : undefined
+          ctx.json(res, 200, await this.downloads.start(key, title, year, index))
+        } catch (e) {
+          ctx.json(res, 502, { error: e instanceof TorrentOpenError ? e.message : 'Stahování se nepodařilo spustit.' })
+        }
+      } else {
+        const info = this.downloads.get(key)
+        ctx.json(res, info ? 200 : 404, info ?? { error: 'Film se nestahuje.' })
+      }
+      return true
+    }
     const torrent = this.torrents.get(key)
     if (!torrent) {
       ctx.json(res, 409, { error: 'Torrent není otevřený' })
@@ -352,7 +438,16 @@ export class Media {
 
     const index = Number(m[3])
     if (!m[4]) {
-      this.torrents.serve(torrent, index, req, res)
+      const probe = url.searchParams.get('probe') === '1'
+      this.torrents.serve(torrent, index, req, res, probe ? undefined : (position) => this.follow(key, index, position))
+    } else if (m[4] === 'prepare') {
+      // Before playback: start the window at the chosen second and report how much is ready.
+      const t = Math.max(0, Number(url.searchParams.get('t')) || 0)
+      // The played file's real length makes the ten-minute window and the buffer accurate.
+      this.ensureProbe(key, index)
+      const position = Math.floor(t * this.bytesPerSecond(key, index))
+      this.follow(key, index, position)
+      ctx.json(res, 200, this.buffer(key, index, position))
     } else if (m[4] === 'play') {
       const audio = Math.max(0, Math.min(20, Number(url.searchParams.get('audio')) || 0))
       const t = Math.max(0, Number(url.searchParams.get('t')) || 0)

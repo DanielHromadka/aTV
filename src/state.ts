@@ -62,7 +62,7 @@ export type ScreenSpec =
   | { type: 'audio-detail'; mediaId: string; title: string; poster?: string }
   | { type: 'actors' }
   | { type: 'actor'; actor: Actor }
-  | { type: 'media-detail'; mediaId: string; title: string; poster?: string; description?: string }
+  | { type: 'media-detail'; mediaId: string; title: string; poster?: string; description?: string; year?: number }
   | { type: 'login' }
   | { type: 'keyboard'; title: string; value: string; secret?: boolean; onDone: (value: string) => void }
 

@@ -11,8 +11,12 @@ services:
       JACKETT_API_KEY: ${JACKETT_API_KEY:-}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       TMDB_API_KEY: ${TMDB_API_KEY:-}
+      JELLYFIN_API_KEY: ${JELLYFIN_API_KEY:-}
+      # Library downloads land here; Jellyfin reads the same folder.
+      ATV_LIBRARY: /media
     volumes:
       - ./data:/data
+      - ${MEDIA_DIR:-./media}:/media
     restart: unless-stopped
 
   jellyfin:
