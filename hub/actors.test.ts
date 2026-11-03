@@ -72,4 +72,35 @@ describe('actor filmographies', () => {
     const service = new Actors('a.b.c', (async () => new Response('', { status: 401 })) as typeof fetch)
     await expect(service.list('', 1)).rejects.toThrow('Zkontrolujte API klíč')
   })
+  it('finds film artwork, retries without the year and prefers the known film', async () => {
+    const calls: string[] = []
+    const fetcher = vi.fn(async (u: URL) => {
+      calls.push(`${u.pathname}?${u.searchParams.get('year') ?? ''}`)
+      if (u.pathname.endsWith('/genre/movie/list')) return Response.json({ genres: [{ id: 28, name: 'Akční' }] })
+      if (u.searchParams.get('year')) return Response.json({ results: [] })
+      return Response.json({ results: [
+        { id: 1, title: 'Matrix fanfilm', vote_count: 2, vote_average: 9 },
+        { id: 603, title: 'Matrix', release_date: '1999-03-30', overview: 'Neo…', poster_path: '/p.jpg', backdrop_path: '/b.jpg', vote_average: 8.2, vote_count: 26000, genre_ids: [28] },
+      ] })
+    })
+    const service = new Actors('secret', fetcher as unknown as typeof fetch)
+    const art = await service.film('Matrix', 1998)
+    expect(art).toEqual({ id: '603', title: 'Matrix', year: 1999, overview: 'Neo…', poster: 'https://image.tmdb.org/t/p/w500/p.jpg',
+      backdrop: 'https://image.tmdb.org/t/p/w1280/b.jpg', rating: 8.2, genres: ['Akční'] })
+    expect(calls.slice(0, 2)).toEqual(['/3/search/movie?1998', '/3/search/movie?'])
+    expect(await service.film('Matrix', 1955)).toBeNull()
+  })
+  it('reads film details with the director and the main cast, with an English overview as fallback', async () => {
+    const fetcher = vi.fn(async (u: URL) => {
+      if (u.searchParams.get('language') === 'en-US') return Response.json({ id: 603, title: 'The Matrix', overview: 'Neo learns…' })
+      return Response.json({ id: 603, title: 'Matrix', original_title: 'The Matrix', release_date: '1999-03-30', overview: '', runtime: 136,
+        vote_average: 8.2, vote_count: 26000, genres: [{ name: 'Akční' }],
+        credits: { cast: [{ id: 6384, name: 'Keanu Reeves', character: 'Neo', profile_path: '/k.jpg' }, { id: 9, name: 'X', adult: true }],
+          crew: [{ name: 'Lana Wachowski', job: 'Director' }, { name: 'Joel Silver', job: 'Producer' }] } })
+    })
+    const d = await new Actors('secret', fetcher as unknown as typeof fetch).filmDetails('603')
+    expect(d).toMatchObject({ title: 'Matrix', originalTitle: 'The Matrix', overview: 'Neo learns…', runtime: 136, votes: 26000, directors: ['Lana Wachowski'],
+      cast: [{ id: '6384', name: 'Keanu Reeves', character: 'Neo', photo: 'https://image.tmdb.org/t/p/w185/k.jpg' }] })
+    await expect(new Actors('secret', fetcher as unknown as typeof fetch).filmDetails('x')).rejects.toThrow('Neplatný')
+  })
 })

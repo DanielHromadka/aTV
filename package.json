@@ -7,9 +7,9 @@
   "scripts": {
     "dev": "vite",
     "hub": "node --watch hub/index.ts",
-    "build": "vite build",
+    "build": "vite build && vite build --config web/vite.config.ts",
     "start": "node hub/index.ts",
-    "typecheck": "tsc --noEmit && tsc -p hub/tsconfig.json",
+    "typecheck": "tsc --noEmit && tsc -p hub/tsconfig.json && tsc -p web/tsconfig.json",
     "test": "vitest run",
     "up": "sh scripts/docker-up.sh",
     "seed": "node scripts/jellyfin-seed.mjs",
@@ -22,12 +22,14 @@
     "build:webos": "npm run build && node scripts/platform-build.mjs webos",
     "build:android": "npm run build && node scripts/platform-build.mjs android",
     "deploy:tizen": "sh scripts/deploy-tizen.sh",
-    "smoke:browser": "npm run build && node scripts/browser-smoke.mjs"
+    "smoke:browser": "npm run build && node scripts/browser-smoke.mjs",
+    "dev:web": "vite --config web/vite.config.ts"
   },
   "devDependencies": {
     "@babel/core": "^7.29.7",
     "@babel/preset-env": "^7.29.7",
     "@preact/preset-vite": "^2.10.6",
+    "@sveltejs/vite-plugin-svelte": "^7.3.1",
     "@types/node": "^26.6.6",
     "@types/ws": "^8.18.2",
     "@types/xml2js": "^0.4.14",
@@ -36,6 +38,7 @@
     "hls.js": "^1.7.4",
     "preact": "^11.1.0",
     "qrcode-generator": "^2.0.4",
+    "svelte": "^5.57.3",
     "terser": "^5.51.2",
     "typescript": "^7.0.2",
     "vite": "^8.3.5",

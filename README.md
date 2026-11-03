@@ -11,6 +11,10 @@ s mobilem jako ovladačem, hlasovými příkazy a vlastní knihovnou filmů pře
 - **Hub** (`hub/`, Node 24 bez buildu): servíruje TV aplikaci i mobilní ovladač, propojuje je přes WebSocket,
   ovládá Samsung po síti (tlačítka, spouštění aplikací, Wake-on-LAN), drží tajemství (Immich, Home Assistant,
   Claude) a vykonává příkazy.
+- **Webová aplikace** (`web/`, Svelte 5 + TypeScript, hub ji servíruje na `/web/`): stejné kategorie, nastavení
+  a vzhled (7 návrhů domovské obrazovky, pozadí, dlaždice, písmo, hodiny) jako TV aplikace, ovládání myší,
+  klávesnicí i dotykem. Vzhled sdílí s televizí a mobilem přes hub; v jednom prohlížeči sdílí s TV verzí i přihlášení
+  k Jellyfinu a historii sledování. Vývoj: `npm run dev:web` (port 5180, napojí se na hub z `HUB_DEV_URL`).
 - **Mobilní ovladač** (`/remote.html`): párování QR kódem, přepínání Tlačítka / Trackpad (trackpad ovládá
   kurzor televize, na Samsungu nativní, jinde kurzor aTV, nebo posouvá výběr), hlasitost, zapnutí/vypnutí TV,
   psaní na TV, příkazy hlasem nebo textem, časovač. Se Samsungem jdou tlačítka i kurzor přímo do televize,
@@ -22,6 +26,40 @@ s mobilem jako ovladačem, hlasovými příkazy a vlastní knihovnou filmů pře
   ffmpeg, když formát přehrávač neumí nebo je zvolená jiná zvuková stopa, a titulky SRT převádí na WebVTT
   (včetně Windows-1250). Nepoužívané torrenty po 2 hodinách maže i s daty (`data/torrents`).
 - **Sdílená logika** (`shared/`): parser českých příkazů, M3U, prostorová navigace, Jellyfin stream, protokol (testy ve vitest).
+
+## Rychlý start
+
+Potřebujete jen [Docker](https://www.docker.com/products/docker-desktop/) a Node 24 (kvůli `npm run up`).
+
+```bash
+git clone https://github.com/DanielHromadka/aTV.git
+cd aTV
+cp .env.example .env      # volitelné klíče, viz níže
+npm install
+npm run up                # postaví a spustí hub a Jellyfin
+```
+
+Skript vypíše adresy v místní síti, například:
+
+| Co | Adresa |
+|---|---|
+| Webová aplikace (počítač, tablet) | `http://<ip-počítače>:8090/web/` |
+| TV aplikace (v prohlížeči televize nebo přes Tizen) | `http://<ip-počítače>:8090/` |
+| Ovladač v mobilu | `http://<ip-počítače>:8090/remote.html` (nebo QR kód v Nastavení) |
+| Jellyfin (vlastní filmy) | `http://<ip-počítače>:8096/` |
+
+Bez klíčů funguje hledání, Internet Archive, veřejné torrent indexy, iVysílání a vzhled. Klíče v `.env`
+přidají další funkce, po úpravě spusťte znovu `npm run up`:
+
+- `TMDB_API_KEY`: plakáty, české popisy, hodnocení, herci a filmografie ([zdarma na TMDB](https://www.themoviedb.org/settings/api)).
+- `JACKETT_URL`, `JACKETT_API_KEY`: další torrentové zdroje (viz sekce Jackett).
+- `ANTHROPIC_API_KEY`: hlasové příkazy, kterým pravidla nerozumí.
+
+Filmy z vlastního disku: `MEDIA_DIR=/cesta/k/filmům npm run up`, pak je v Jellyfinu přidejte jako knihovnu.
+Zastavení: `docker compose down`. Aktualizace: `git pull && npm run up`.
+
+> aTV umí hledat a přehrávat i z veřejných torrentových indexů. Za to, co si kdo stáhne nebo pustí,
+> odpovídá každý sám. Volná díla najdete v Internet Archive (dlaždice Archivní filmy).
 
 ## Spuštění v Dockeru (hub + Jellyfin)
 

@@ -20,6 +20,12 @@ export type TvMessage =
   /** A change from the TV's Appearance panel; the hub applies it and sends the result to everyone. */
   | { t: 'appearance-set'; patch: Partial<Appearance> }
 
+/** aTV web app (desktop browser) → hub. */
+export type WebMessage =
+  | { t: 'hello'; role: 'web' }
+  | { t: 'appearance-set'; patch: Partial<Appearance> }
+  | { t: 'sleep-set'; minutes: number | null }
+
 /** Phone → hub. */
 export type RemoteMessage =
   | { t: 'hello'; role: 'remote'; token: string }

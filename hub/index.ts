@@ -62,6 +62,8 @@ const ivysilani = new Ivysilani()
 const media = new Media(new Catalog(config.dataDir), torrents, config.port, config.jackett ? new Jackett(config.jackett, config.dataDir) : undefined)
 
 const tvs = new Set<WebSocket>()
+/** aTV web apps in desktop browsers: they share the look, pairing code and sleep timer, not remote input. */
+const webs = new Set<WebSocket>()
 /** Platform each TV app reported; decides whether remote input goes to the Samsung itself. */
 const tvPlatforms = new Map<WebSocket, string>()
 const remotes = new Set<WebSocket>()
@@ -91,7 +93,7 @@ function pairingUrl(code: string, ws?: WebSocket): string {
 }
 
 const pairing = new PairingCode((code) => {
-  for (const ws of tvs) send(ws, { t: 'pairing', code, url: pairingUrl(code, ws) })
+  for (const ws of [...tvs, ...webs]) send(ws, { t: 'pairing', code, url: pairingUrl(code, ws) })
 })
 
 function send(ws: WebSocket, msg: HubToTv | HubToRemote): void {
@@ -99,6 +101,10 @@ function send(ws: WebSocket, msg: HubToTv | HubToRemote): void {
 }
 function toTvs(msg: HubToTv): void {
   for (const ws of tvs) send(ws, msg)
+}
+/** TVs and web apps: what every screen shows (look, sleep timer, notices). */
+function toScreens(msg: HubToTv): void {
+  for (const ws of [...tvs, ...webs]) send(ws, msg)
 }
 
 /** Asks Jellyfin to scan its libraries; without an API key the TVs do it with their own login. */
@@ -119,7 +125,7 @@ media.downloads = new Downloads(config.dataDir, config.libraryDir, torrents, {
   resolve: (key) => media.resolveSource(key),
   done: (title) => {
     void refreshJellyfin()
-    toTvs({ t: 'notify', title: 'Staženo do Knihovny', text: `${title} bude v Knihovně, až ji Jellyfin načte.` })
+    toScreens({ t: 'notify', title: 'Staženo do Knihovny', text: `${title} bude v Knihovně, až ji Jellyfin načte.` })
   },
 })
 function toRemotes(msg: HubToRemote): void {
@@ -136,7 +142,7 @@ function setAppearance(patch: unknown): void {
   store.state.appearance = next
   store.save()
   const msg = appearanceMessage()
-  toTvs(msg)
+  toScreens(msg)
   toRemotes(msg)
 }
 function status(): HubToRemote {
@@ -151,7 +157,7 @@ function setSleep(minutes: number | null): void {
       sleep = null
       console.log('[sleep] time is up')
       toTvs({ t: 'sleep-fire' })
-      toTvs({ t: 'sleep', endsAt: null })
+      toScreens({ t: 'sleep', endsAt: null })
       toRemotes(status())
       // Give the TV app a moment to stop playback (and report it) before switching off.
       if (samsung) {
@@ -165,7 +171,7 @@ function setSleep(minutes: number | null): void {
     }, minutes * 60_000)
     sleep = { endsAt: Date.now() + minutes * 60_000, timer }
   }
-  toTvs({ t: 'sleep', endsAt: sleep?.endsAt ?? null })
+  toScreens({ t: 'sleep', endsAt: sleep?.endsAt ?? null })
   toRemotes(status())
 }
 
@@ -252,6 +258,12 @@ function onTvMessage(msg: Record<string, unknown>): void {
   }
 }
 
+/** The web app may change the shared look and the TV's sleep timer, like the TV's own settings. */
+function onWebMessage(msg: Record<string, unknown>): void {
+  if (msg.t === 'appearance-set') setAppearance(msg.patch)
+  else if (msg.t === 'sleep-set') setSleep(typeof msg.minutes === 'number' && msg.minutes > 0 && msg.minutes <= 600 ? msg.minutes : null)
+}
+
 /**
  * Remote input goes to the Samsung as native keys and pointer events when the hub controls one,
  * so it works in every app on the TV (Netflix, the browser), aTV included. When an aTV runs
@@ -323,7 +335,7 @@ const wss = new WebSocketServer({ noServer: true, maxPayload: 64 * 1024 })
 wss.on('connection', (ws, req: IncomingMessage) => {
   const host = req.headers.host ?? ''
   if (/^[a-z0-9.-]+(:\d+)?$/i.test(host) && !/^(localhost|127\.|\[::1\])/i.test(host)) tvBase.set(ws, `http://${host}`)
-  let role: 'tv' | 'remote' | null = null
+  let role: 'tv' | 'remote' | 'web' | null = null
   ws.on('message', (data) => {
     const msg = parse(data)
     if (!msg) return
@@ -340,6 +352,13 @@ wss.on('connection', (ws, req: IncomingMessage) => {
         for (const p of pending) send(ws, { t: 'intent', intent: p.intent })
         pending = []
         toRemotes(status())
+      } else if (msg.t === 'hello' && msg.role === 'web') {
+        role = 'web'
+        webs.add(ws)
+        console.log(`[web] connected, ${webs.size} total`)
+        send(ws, { t: 'pairing', code: pairing.code, url: pairingUrl(pairing.code, ws) })
+        send(ws, { t: 'sleep', endsAt: sleep?.endsAt ?? null })
+        send(ws, appearanceMessage())
       } else if (msg.t === 'hello' && msg.role === 'remote' && store.hasRemote(msg.token)) {
         role = 'remote'
         remotes.add(ws)
@@ -352,6 +371,7 @@ wss.on('connection', (ws, req: IncomingMessage) => {
       return
     }
     if (role === 'tv') onTvMessage(msg)
+    else if (role === 'web') onWebMessage(msg)
     else void onRemoteMessage(ws, msg)
   })
   ws.on('close', () => {
@@ -362,6 +382,7 @@ wss.on('connection', (ws, req: IncomingMessage) => {
       toRemotes(status())
     }
     remotes.delete(ws)
+    webs.delete(ws)
   })
 })
 
@@ -460,6 +481,18 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
     return json(res, 200, path === '/api/actors' ? await actors.list(url.searchParams.get('q') || '', page) : await actors.filmography(id))
   }
 
+  if (/^\/api\/films\/\d{1,10}$/.test(path)) {
+    if (req.method !== 'GET') return json(res, 405, { error: 'Použijte GET' })
+    if (!actors) return json(res, 503, { error: 'Filmová databáze není připojená. Doplňte TMDB klíč v konfiguraci hubu.' })
+    return json(res, 200, await actors.filmDetails(path.slice('/api/films/'.length)))
+  }
+  if (path === '/api/films/art') {
+    if (req.method !== 'GET') return json(res, 405, { error: 'Použijte GET' })
+    if (!actors) return json(res, 503, { error: 'Filmová databáze není připojená. Doplňte TMDB klíč v konfiguraci hubu.' })
+    const year = Number(url.searchParams.get('year'))
+    return json(res, 200, await actors.film(url.searchParams.get('q') || '', year >= 1880 && year <= 2100 ? year : undefined))
+  }
+
   if (path === '/api/pair' && req.method === 'POST') {
     const body = await readJson(req)
     if (!pairing.check(body.code)) return json(res, 403, { error: 'Špatný kód' })
@@ -483,7 +516,7 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
     if (!title) return json(res, 400, { error: 'title chybí' })
     const text = typeof body.text === 'string' ? body.text.slice(0, 500) : undefined
     const image = typeof body.image === 'string' && /^https?:\/\//.test(body.image) ? body.image : undefined
-    toTvs({ t: 'notify', title, text, image })
+    toScreens({ t: 'notify', title, text, image })
     return json(res, 200, { ok: true, delivered: tvs.size })
   }
 
@@ -504,7 +537,7 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
       // The TV falls back to the default scene when its photo is gone.
       if (store.state.appearance.background === `photo:${bgPath[1]}`) setAppearance({ background: 'scene:valley' })
       else {
-        toTvs(appearanceMessage())
+        toScreens(appearanceMessage())
         toRemotes(appearanceMessage())
       }
       return json(res, 200, { ok: true })

@@ -1,7 +1,7 @@
 {
   "samsung": {
-    "host": "192.168.0.106",
-    "mac": "54:bd:79:9d:44:bb",
+    "host": "192.168.0.50",
+    "mac": "AA:BB:CC:DD:EE:FF",
     "name": "aTV"
   },
   "iptv": {
